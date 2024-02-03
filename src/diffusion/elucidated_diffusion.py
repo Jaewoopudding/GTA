@@ -31,7 +31,6 @@ pyrootutils.set_root(path = path,
 
 
 from src.data.norm import BaseNormalizer
-from src.online.utils import make_inputs_from_replay_buffer
 
 
 # helpers

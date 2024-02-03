@@ -29,7 +29,7 @@ pyrootutils.set_root(path = path,
                      pythonpath = True)
 
 
-from src.diffusion.elucidated_diffusion import Trainer, define_rewardweighting_sampler, define_terminal_sampler
+from src.diffusion.elucidated_diffusion import Trainer, define_rewardweighting_sampler
 from src.data.norm import MinMaxNormalizer, normalizer_factory
 from src.diffusion.utils import split_diffusion_trajectory, construct_diffusion_model
 from corl.shared.utils  import merge_dictionary
