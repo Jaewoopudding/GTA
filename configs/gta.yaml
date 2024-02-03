@@ -1,0 +1,65 @@
+
+
+construct_diffusion_model : 
+  normalizer_type : &normalizer_type standard
+  denoising_network : 
+    _target_ : src.diffusion.denoiser_network.mixer.MixerUnet
+    horizon : &seq_len 31
+    d_in : 4
+    dim : 16
+    cond_dim : 1
+    condition_dropout : 0.25
+    use_dropout : True
+    force_dropout : False # for uncond sampling
+    learned_sinusoidal_cond : False
+    random_fourier_features : True
+    learned_sinusoidal_dim : 16
+  disable_terminal_norm : True # No normalization on the terminals.
+
+# Diffusion Model.
+ElucidatedDiffusion : 
+  num_sample_steps : 128
+  sigma_data : 1.0
+  S_churn : 80
+  S_tmin : 0.05
+  S_tmax : 50
+  S_noise : 1.003
+
+# Training.
+Trainer : 
+  train_batch_size : &batch_size 256
+  train_lr : 3e-4
+  lr_scheduler : cosinewarmup
+  weight_decay : 0
+  train_num_steps : 1000000
+  save_and_sample_every : 200000
+  reweighted_training : False
+  
+  
+# Sampling.
+SimpleDiffusionGenerator : 
+  num_sample_steps : 128
+  sample_batch_size : 1000
+  noise_level : 0.5
+  guidance_rewardscale : 1.3
+  amplify_returnscale : 1.3
+  save_num_transitions : 5000000
+  temperature : 1.0
+  weighted_sampling : False
+  state_conditioning : False
+  with_strategy : False
+  weight_param : 50.0
+
+
+# Dataset.
+Dataset : 
+  seq_len : *seq_len
+  reward_scale : 0.01
+  batch_size : *batch_size
+  num_workers : 4
+  normalizer_type : *normalizer_type
+  modalities : ["observations", "actions", "rewards"]
+  discounted_return : True
+  gamma : 0.99
+  restore_rewards : False
+  penalty : 100

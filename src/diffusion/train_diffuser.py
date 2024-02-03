@@ -423,7 +423,7 @@ if __name__ == '__main__':
                         noise_level = cfg.SimpleDiffusionGenerator.noise_level,
                         temperature=cfg.SimpleDiffusionGenerator.temperature,
                         device=distributed_state.device,
-                        guidance_rewardscale=cfg.SimpleDiffusionGenerator.guidance_rewardscale,
+                        guidance_rewardscale=cfg.SimpleDiffusionGenerator.amplify_returnscale,
                         fixed_rewardscale=cfg.SimpleDiffusionGenerator.fixed_rewardscale,
                         reward_scale=cfg.Dataset.reward_scale,
                         state_conditioning = cfg.SimpleDiffusionGenerator.state_conditioning,
