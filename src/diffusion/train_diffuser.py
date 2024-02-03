@@ -81,11 +81,7 @@ class SimpleDiffusionGenerator:
         else:
             conditioning_value = rewards.squeeze().cpu().numpy().sum(axis=-1)
         cond = np.copy(conditioning_value)
-        if fixed_rewardscale is not None:
-            criteria_reward = max_conditioning_return * fixed_rewardscale
-            cond[conditioning_value < criteria_reward] = criteria_reward
-            cond[conditioning_value >= criteria_reward] = max_conditioning_return
-        elif guidance_rewardscale is not None: 
+        if guidance_rewardscale is not None: 
             conditioning_value *= guidance_rewardscale
             cond[conditioning_value>0] = cond[conditioning_value>0] * guidance_rewardscale
             reverse_guidancescale = -guidance_rewardscale+2
@@ -249,7 +245,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--dataset', type=str, default='halfcheetah-medium-v2')
     parser.add_argument('--config_path', type=str, default='../../configs')
-    parser.add_argument('--config_name', type=str, default='temporalattention_denoiser.yaml')
+    parser.add_argument('--config_name', type=str, default='gta.yaml')
     parser.add_argument('--wandb_project', type=str, default="gta")
     parser.add_argument('--wandb_entity', type=str, default="gta")
     parser.add_argument('--wandb_group', type=str, default="gta")
