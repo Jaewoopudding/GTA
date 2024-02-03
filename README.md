@@ -15,7 +15,7 @@ To train diffusion model, please run the following command
 ### Augment Trajectory-Level Data
 To sample augmented data from trained diffusion model, please run the following command
 ```
-    python src/diffusion/train_diffuser.py --dataset <env_name>-<dataset_type>-v2" --config_name <config_name> --load_checkpoint --ckpt_path <ckpt_path> 0.5 --back_and_forth
+    python src/diffusion/train_diffuser.py --dataset <env_name>-<dataset_type>-v2" --config_name <config_name> --load_checkpoint --ckpt_path <ckpt_path> --back_and_forth
 ```
 
 ### Train Offline RL Algorithm
