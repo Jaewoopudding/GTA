@@ -25,7 +25,7 @@ def merge_dictionary(list_of_Dict: List[Dict]) -> Dict:
 
 def get_saved_dataset(env: str) -> Dict:
     with open(f'./data/{env}.pkl','rb') as f:
-        data = pickle.load(f) # data는 Dict의 list로 되어 있다.
+        data = pickle.load(f) 
     return merge_dictionary(data)
 
 
