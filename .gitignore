@@ -1,0 +1,15 @@
+__pycache__/
+*.csv
+*.log
+*.pt
+*.pkl
+wandb/
+outputs/
+*.ckpt
+*.npy
+*.yaml
+*.json
+*.pth
+*.npz
+*.png
+*.gz
