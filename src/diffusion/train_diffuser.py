@@ -31,11 +31,10 @@ pyrootutils.set_root(path = path,
 
 from src.diffusion.elucidated_diffusion import Trainer, define_rewardweighting_sampler, define_terminal_sampler
 from src.data.norm import MinMaxNormalizer, normalizer_factory
-from src.diffusion.utils import make_inputs,  split_diffusion_trajectory, construct_diffusion_model
-from corl.shared.utils  import get_saved_dataset, merge_dictionary
+from src.diffusion.utils import split_diffusion_trajectory, construct_diffusion_model
+from corl.shared.utils  import merge_dictionary
 from corl.shared.buffer import DiffusionDataset, DiffusionTrajectoryDataset
-from src.dynamics.reward import RewardModel, TrainConfig
-from corl.shared.utils  import compute_mean_std, normalize_states, merge_dictionary
+from corl.shared.utils  import merge_dictionary
 
 
 
@@ -60,47 +59,6 @@ class SimpleDiffusionGenerator:
         self.modalities = modalities
         print(f'Sampling using: {self.num_sample_steps} steps, {self.sample_batch_size} batch size.')
 
-    def sample(
-            self,
-            num_samples: int,
-    ) -> (np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray):
-        assert num_samples % self.sample_batch_size == 0, 'num_samples must be a multiple of sample_batch_size'
-        num_batches = num_samples // self.sample_batch_size
-        generated_samples = []
-        for i in range(num_batches):
-            print(f'Generating split {i + 1} of {num_batches}')
-            sampled_outputs = self.diffusion.sample(
-                batch_size=self.sample_batch_size,
-                num_sample_steps=self.num_sample_steps,
-                clamp=self.clamp_samples,
-            )
-            sampled_outputs = sampled_outputs.cpu().numpy()
-            if "rewards" in self.modalities:
-                obs, actions, rewards, next_obs = split_diffusion_trajectory(sampled_outputs, self.env)
-                
-                for b in range(self.sample_batch_size):
-                    temp = {
-                        "observations": obs[b,:,:],
-                        "actions": actions[b,:,:],
-                        "next_observations": next_obs[b,:,:],
-                        "rewards": rewards[b,:,:].reshape(-1,1)
-                    }
-                    generated_samples.append(temp)
-            else : 
-                obs, actions, next_obs =  split_diffusion_trajectory(sampled_outputs, self.env)
-            
-
-                for b in range(self.sample_batch_size):
-                    temp = {
-                        "observations": obs[b,:,:],
-                        "actions": actions[b,:,:],
-                        "next_observations": next_obs[b,:,:],
-                    }
-                    generated_samples.append(temp)
-
-
-        return generated_samples
-    
     
     def prepare_sampling_data(
             self,
@@ -125,7 +83,6 @@ class SimpleDiffusionGenerator:
         cond = np.copy(conditioning_value)
         if fixed_rewardscale is not None:
             criteria_reward = max_conditioning_return * fixed_rewardscale
-            # cond = np.ones_like(cond) * criteria_reward
             cond[conditioning_value < criteria_reward] = criteria_reward
             cond[conditioning_value >= criteria_reward] = max_conditioning_return
         elif guidance_rewardscale is not None: 
@@ -160,8 +117,8 @@ class SimpleDiffusionGenerator:
             is_terminate = terminals.sum(dim=-1)
             for batch_idx, term in enumerate(is_terminate):
                 if term == 1:
-                    cond_state[batch_idx] = data[batch_idx,-2:,:] # 마지막 state, action, reward, state
-                    cond[batch_idx] = conditioning_value[batch_idx] # con
+                    cond_state[batch_idx] = data[batch_idx,-2:,:] # condintion on last state, action, reward, state
+                    cond[batch_idx] = conditioning_value[batch_idx] 
 
         else:
             cond_state = None
@@ -171,46 +128,6 @@ class SimpleDiffusionGenerator:
         cond *= reward_scale
 
         return data, cond, terminals, cond_state
-
-
-    def get_high_reward_samples(
-            self, 
-            dataset,
-            stochastic: bool = False,
-    ):
-        all_idx = range(len(dataset))
-        states, actions, rewards, returns, time_steps = dataset[all_idx] #outputs error
-        obs_dim = self.env.observation_space.shape[0]
-        action_dim = self.env.action_space.shape[0]
-
-        criteria_rewards = rewards.sum(axis = (1,2))
-        
-
-        # Option 2: Proportional to Reward
-        # Code from https://github.com/siddarthk97/ddom/tree/main
-        
-        # Discretize bins and assign weight to each bins
-        hist, bin_edges = np.histogram(criteria_rewards, bins=20)
-        hist = hist / np.sum(hist)
-        
-        softmin_prob_unnorm = np.exp(bin_edges[1:] / 5.0)
-        softmin_prob = softmin_prob_unnorm / np.sum(softmin_prob_unnorm)
-
-        provable_dist = softmin_prob * (hist / (hist + 1e-3))
-        provable_dist = provable_dist / (np.sum(provable_dist) + 1e-7)
-
-        bin_indices = np.digitize(criteria_rewards, bin_edges[1:])
-        hist_prob = hist[np.minimum(bin_indices, 19)]
-
-        weights = provable_dist[np.minimum(bin_indices, 19)] / (hist_prob + 1e-7)
-        weights = np.clip(weights, a_min=0.0, a_max=5.0)
-
-        # Select samples proportional to weights
-        sampler = WeightedRandomSampler(torch.DoubleTensor(weights), len(states))
-        data_loader = DataLoader(dataset, batch_size=self.sample_batch_size, sampler=sampler)
-        return next(iter(data_loader))[0]
-    
-
 
     def sample_back_and_forth(
             self,
@@ -333,9 +250,9 @@ if __name__ == '__main__':
     parser.add_argument('--dataset', type=str, default='halfcheetah-medium-v2')
     parser.add_argument('--config_path', type=str, default='../../configs')
     parser.add_argument('--config_name', type=str, default='temporalattention_denoiser.yaml')
-    parser.add_argument('--wandb_project', type=str, default="synther")
-    parser.add_argument('--wandb_entity', type=str, default="gda-for-orl")
-    parser.add_argument('--wandb_group', type=str, default="resmlp1")
+    parser.add_argument('--wandb_project', type=str, default="gta")
+    parser.add_argument('--wandb_entity', type=str, default="gta")
+    parser.add_argument('--wandb_group', type=str, default="gta")
     #
     parser.add_argument('--results_folder', type=str, default='./results')
     parser.add_argument('--use_gpu', action='store_true', default=True)
@@ -345,11 +262,6 @@ if __name__ == '__main__':
     parser.add_argument('--ckpt_path', type=str, default=None)
     
     parser.add_argument('--back_and_forth', action='store_true')
-    parser.add_argument('--stochastic', action='store_true')
-    parser.add_argument("--guidance_rewardscale", type=float, default=None) #1203 실험용
-    parser.add_argument("--noise_level", type=float, default=None) #1203 실험용
-    parser.add_argument("--fixed_rewardscale", type=float, default=None) #1203 실험용
-    parser.add_argument("--temperature", type=float, default=None) #1203 실험용
     args = parser.parse_args()
         
     with initialize(version_base=None, config_path=args.config_path):
@@ -407,65 +319,16 @@ if __name__ == '__main__':
                 penalty = penalty,  
             )
     else:
-        if args.load_checkpoint:
-            if (cfg.SimpleDiffusionGenerator.weighted_sampling) or (cfg.SimpleDiffusionGenerator.with_strategy):
-                dataset = DiffusionTrajectoryDataset(
-                    dataset,
-                    args.dataset,
-                    seq_len = cfg.Dataset.seq_len,
-                    discounted_return = cfg.Dataset.discounted_return,
-                    gamma = cfg.Dataset.gamma,
-                    penalty = penalty,  
-                )
-            else:
-                if cfg.Dataset.seq_len == 1: #0108 샘플 실험용
-                    dataset = DiffusionTrajectoryDataset(
-                        dataset,
-                        args.dataset,
-                        seq_len = cfg.Dataset.seq_len,
-                        discounted_return = cfg.Dataset.discounted_return,
-                        gamma = cfg.Dataset.gamma,
-                        penalty = penalty,  
-                    )
-                else: #0117
-                    dataset = DiffusionTrajectoryDataset(
-                        dataset,
-                        args.dataset,
-                        seq_len = cfg.Dataset.seq_len,
-                        discounted_return = cfg.Dataset.discounted_return,
-                        gamma = cfg.Dataset.gamma,
-                        restore_rewards=cfg.Dataset.restore_rewards,
-                        penalty = penalty,  
-                    )
-        else :
-            if cfg.Trainer.reweighted_training:
-                dataset = DiffusionTrajectoryDataset(
-                    dataset,
-                    args.dataset,
-                    seq_len = cfg.Dataset.seq_len,
-                    discounted_return = cfg.Dataset.discounted_return,
-                    gamma = cfg.Dataset.gamma,
-                    penalty = penalty,  
-                )
-            elif "maze" in args.dataset :
-                dataset = DiffusionTrajectoryDataset(
-                    dataset,
-                    args.dataset,
-                    seq_len = cfg.Dataset.seq_len,
-                    discounted_return = cfg.Dataset.discounted_return,
-                    gamma = cfg.Dataset.gamma,
-                    penalty = penalty,  
-                )
-            else:
-                dataset = DiffusionTrajectoryDataset(
-                    dataset,
-                    args.dataset,
-                    seq_len = cfg.Dataset.seq_len,
-                    discounted_return = cfg.Dataset.discounted_return,
-                    gamma = cfg.Dataset.gamma,
-                    restore_rewards=cfg.Dataset.restore_rewards,
-                    penalty = penalty,  
-                )
+        print("load with Diffusion Trajectory Dataset")
+        dataset = DiffusionTrajectoryDataset(
+            dataset,
+            args.dataset,
+            seq_len = cfg.Dataset.seq_len,
+            discounted_return = cfg.Dataset.discounted_return,
+            gamma = cfg.Dataset.gamma,
+            restore_rewards=cfg.Dataset.restore_rewards,
+            penalty = penalty,  
+        )
 
 
     now = datetime.now()
@@ -479,18 +342,6 @@ if __name__ == '__main__':
     if not os.path.exists(resfolder):
         os.makedirs(resfolder)
     
-    #1203실험용, override config
-    if args.guidance_rewardscale is not None:
-        cfg.SimpleDiffusionGenerator.guidance_rewardscale = args.guidance_rewardscale
-        cfg.SimpleDiffusionGenerator.fixed_rewardscale = None
-    if args.noise_level is not None:
-        cfg.SimpleDiffusionGenerator.noise_level = args.noise_level
-    if args.fixed_rewardscale is not None:
-        cfg.SimpleDiffusionGenerator.fixed_rewardscale = args.fixed_rewardscale
-        cfg.SimpleDiffusionGenerator.guidance_rewardscale = None
-    if args.temperature is not None:
-        cfg.SimpleDiffusionGenerator.temperature = args.temperature
-
     
     with open(os.path.join(resfolder, "config.yaml"), "w") as f:
         OmegaConf.save(cfg, f)
@@ -537,7 +388,6 @@ if __name__ == '__main__':
         if trainer.accelerator.is_main_process:
             trainer.ema.to(distributed_state.device)
         # Load the last checkpoint.
-        #trainer.load(milestone=trainer.train_num_steps)
         trainer.load(ckpt_path=args.ckpt_path)
 
     if args.load_checkpoint:
@@ -552,146 +402,42 @@ if __name__ == '__main__':
                     sample_batch_size=sample_batch_size,
                 )
                 if args.back_and_forth:
-                    if not cfg.SimpleDiffusionGenerator.with_strategy:
-                        if cfg.SimpleDiffusionGenerator.weighted_sampling:
-                            print(f"sampling with weighted sampling {cfg.SimpleDiffusionGenerator.weight_param}")
-                            sample_loader = DataLoader(dataset, 
-                                                    batch_size=sample_batch_size,
-                                                    sampler=define_rewardweighting_sampler(dataset, args.dataset, cfg.Dataset.reward_scale, cfg.SimpleDiffusionGenerator.weight_param))                
-                        else:
-                            sample_loader = DataLoader(dataset, shuffle=True, batch_size=sample_batch_size)                
-                        # Generate samples via back-and-forth
-                            
-                        num_transitions = cfg.SimpleDiffusionGenerator.save_num_transitions
-                        # samllest num_transition which is bigger than cfg.SimpleDiffusionGenerator.save_num_transitions
-                        # and divisible by both cfg.Dataset.seq_len and sample_batch_size
-
-                        lcm = cfg.Dataset.seq_len * sample_batch_size
-                        num_transitions = ((num_transitions + lcm - 1) // lcm) * lcm
-                        # num_transitions = -(-num_transitions // (cfg.Dataset.seq_len * sample_batch_size // \
-                        #                   math.gcd(cfg.Dataset.seq_len, sample_batch_size))) * \
-                        #                   (cfg.Dataset.seq_len * sample_batch_size // math.gcd(cfg.Dataset.seq_len, sample_batch_size))
-                        # #num_transitions = math.ceil(num_transitions / math.lcm(cfg.Dataset.seq_len, sample_batch_size)) * math.lcm(cfg.Dataset.seq_len, sample_batch_size)
-                        num_samples = num_transitions // cfg.Dataset.seq_len
-                        
-
-                        generated_samples = generator.sample_back_and_forth(
-                            data_loader=sample_loader,
-                            num_samples=num_samples,
-                            noise_level = cfg.SimpleDiffusionGenerator.noise_level,
-                            temperature=cfg.SimpleDiffusionGenerator.temperature,
-                            device=distributed_state.device,
-                            guidance_rewardscale=cfg.SimpleDiffusionGenerator.guidance_rewardscale,
-                            fixed_rewardscale=cfg.SimpleDiffusionGenerator.fixed_rewardscale,
-                            reward_scale=cfg.Dataset.reward_scale,
-                            state_conditioning = cfg.SimpleDiffusionGenerator.state_conditioning,
-                            max_conditioning_return = dataset.trajectory_returns.max(),
-                            discounted_return = cfg.Dataset.discounted_return,
-                            retain_original=True
-                        )
-
-                    else: #cfg.SimpleDiffusionGenerator.with_strategy=True
-                        print("sampling with strategy")
-                        print("terminal rate : ", dataset.terminal_rate)
-                        terminal_sampler = define_terminal_sampler(
-                            dataset,
-                            args.dataset,
-                            terminal=True
-                        )
-                        nonterminal_sampler = define_terminal_sampler(
-                            dataset,
-                            args.dataset,
-                            terminal=False
-                        )
-
-                        terminal_sample_loader = DataLoader(dataset, 
-                                                            batch_size=cfg.SimpleDiffusionGenerator.sample_batch_size,
-                                                            sampler=terminal_sampler)
-                        nonterminal_sample_loader = DataLoader(dataset, 
-                                                            batch_size=cfg.SimpleDiffusionGenerator.sample_batch_size,
-                                                            sampler=terminal_sampler)
-                        
-                        num_transitions = cfg.SimpleDiffusionGenerator.save_num_transitions
-                        # samllest num_transition which is bigger than cfg.SimpleDiffusionGenerator.save_num_transitions
-                        # and divisible by both cfg.Dataset.seq_len and sample_batch_size
-
-                        lcm = cfg.Dataset.seq_len * sample_batch_size
-                        num_transitions = ((num_transitions + lcm - 1) // lcm) * lcm
-                        # num_transitions = -(-num_transitions // (cfg.Dataset.seq_len * sample_batch_size // \
-                        #                   math.gcd(cfg.Dataset.seq_len, sample_batch_size))) * \
-                        #                   (cfg.Dataset.seq_len * sample_batch_size // math.gcd(cfg.Dataset.seq_len, sample_batch_size))
-                        # #num_transitions = math.ceil(num_transitions / math.lcm(cfg.Dataset.seq_len, sample_batch_size)) * math.lcm(cfg.Dataset.seq_len, sample_batch_size)
-                        num_samples = num_transitions // cfg.Dataset.seq_len
-
-                        terminal_rate = dataset.terminal_rate
-
-                        terminal_samples = int(num_samples * terminal_rate) +1
-                        nonterminal_samples = num_samples - terminal_samples
-
-                        terminal_generated_samples = generator.sample_back_and_forth(
-                            data_loader=terminal_sample_loader,
-                            num_samples=terminal_samples,
-                            noise_level = cfg.SimpleDiffusionGenerator.noise_level/2,
-                            temperature=0,
-                            device=distributed_state.device,
-                            guidance_rewardscale=cfg.SimpleDiffusionGenerator.guidance_rewardscale,
-                            fixed_rewardscale=cfg.SimpleDiffusionGenerator.fixed_rewardscale,
-                            reward_scale=cfg.Dataset.reward_scale,
-                            state_conditioning = cfg.SimpleDiffusionGenerator.state_conditioning,
-                            max_conditioning_return = dataset.trajectory_returns.max(),
-                            discounted_return = cfg.Dataset.discounted_return,
-                        )
-
-                        
-                        nonterminal_generated_samples = generator.sample_back_and_forth(
-                            data_loader=nonterminal_sample_loader,
-                            num_samples=nonterminal_samples,
-                            noise_level = cfg.SimpleDiffusionGenerator.noise_level,
-                            temperature=cfg.SimpleDiffusionGenerator.temperature,
-                            device=distributed_state.device,
-                            guidance_rewardscale=cfg.SimpleDiffusionGenerator.guidance_rewardscale,
-                            fixed_rewardscale=cfg.SimpleDiffusionGenerator.fixed_rewardscale,
-                            reward_scale=cfg.Dataset.reward_scale,
-                            state_conditioning = cfg.SimpleDiffusionGenerator.state_conditioning,
-                            max_conditioning_return = dataset.trajectory_returns.max(),
-                            discounted_return = cfg.Dataset.discounted_return,
-                        )
-
-                        generated_samples = terminal_generated_samples + nonterminal_generated_samples
-
-                # make file name - 5M으로 계산해서 
-                num_samples = str(int(num_transitions // 1e6))+"M"
-
-
-                if cfg.SimpleDiffusionGenerator.guidance_rewardscale is not None : 
-                    guide = str(cfg.SimpleDiffusionGenerator.guidance_rewardscale)
-                    if '.' in guide : 
-                        guide = guide.replace('.','_')
-                    guide += "x"
-                else:
-                    guide = int(100*cfg.SimpleDiffusionGenerator.fixed_rewardscale)
-                    guide = "fixed"+str(guide)
-                if cfg.construct_diffusion_model.denoising_network.force_dropout:
-                    guide = "uncond"
-                
-                model_name = args.config_name.split('_')[0]
-
-                noise_level = int(100*cfg.SimpleDiffusionGenerator.noise_level)
-
-                mods = ""
-                for mod in cfg.Dataset.modalities:
-                    if mod == "observations":
-                        mods += "s"
+                    
+                    if cfg.SimpleDiffusionGenerator.weighted_sampling:
+                        print(f"sampling with weighted sampling {cfg.SimpleDiffusionGenerator.weight_param}")
+                        sample_loader = DataLoader(dataset, 
+                                                batch_size=sample_batch_size,
+                                                sampler=define_rewardweighting_sampler(dataset, args.dataset, cfg.Dataset.reward_scale, cfg.SimpleDiffusionGenerator.weight_param))                
                     else:
-                        mods += mod[0]
+                        sample_loader = DataLoader(dataset, shuffle=True, batch_size=sample_batch_size)                
+                    # Generate samples via back-and-forth
+                        
+                    num_transitions = cfg.SimpleDiffusionGenerator.save_num_transitions
+                    # samllest num_transition which is bigger than cfg.SimpleDiffusionGenerator.save_num_transitions
+                    # and divisible by both cfg.Dataset.seq_len and sample_batch_size
 
-                temp = str(cfg.SimpleDiffusionGenerator.temperature)
-                if '.' in temp :
-                    temp = temp.replace('.','_')
+                    lcm = cfg.Dataset.seq_len * sample_batch_size
+                    num_transitions = ((num_transitions + lcm - 1) // lcm) * lcm
+                    num_samples = num_transitions // cfg.Dataset.seq_len
+                    
 
-                wp = int(cfg.SimpleDiffusionGenerator.weight_param)
+                    generated_samples = generator.sample_back_and_forth(
+                        data_loader=sample_loader,
+                        num_samples=num_samples,
+                        noise_level = cfg.SimpleDiffusionGenerator.noise_level,
+                        temperature=cfg.SimpleDiffusionGenerator.temperature,
+                        device=distributed_state.device,
+                        guidance_rewardscale=cfg.SimpleDiffusionGenerator.guidance_rewardscale,
+                        fixed_rewardscale=cfg.SimpleDiffusionGenerator.fixed_rewardscale,
+                        reward_scale=cfg.Dataset.reward_scale,
+                        state_conditioning = cfg.SimpleDiffusionGenerator.state_conditioning,
+                        max_conditioning_return = dataset.trajectory_returns.max(),
+                        discounted_return = cfg.Dataset.discounted_return,
+                        retain_original=True
+                    )
 
-                save_file_name = f"{num_samples}-{guide}-{model_name}-{noise_level}-{mods}-temp{temp}_{wp}.npz"
+
+                save_file_name = f"gta_smaples.npz"
                 
                 gen_sample = np.array(generated_samples)
                 np.random.shuffle(gen_sample)

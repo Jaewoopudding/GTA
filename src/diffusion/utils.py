@@ -109,11 +109,6 @@ def construct_diffusion_model(
                         d_in=D, 
                         cond_dim=cond_dim)
 
-    #if disable_terminal_norm:
-    #    terminal_dim = D - 1
-    #    if terminal_dim not in skip_dims:
-    #        skip_dims.append(terminal_dim)
-
     if skip_dims:
         print(f"Skipping normalization for dimensions {skip_dims}.")
 

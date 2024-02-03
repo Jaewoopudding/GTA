@@ -56,6 +56,7 @@ def define_rewardweighting_sampler(dataset,
                                     weight_param):                 
     '''
     weight_param: work as weight for sparse reward setting, bin num for dense reward setting
+    Code from https://github.com/siddarthk97/ddom/tree/main
     '''
 
     print('Reweighted training on high reward samples')
@@ -101,22 +102,6 @@ def define_rewardweighting_sampler(dataset,
         sampler = WeightedRandomSampler(torch.DoubleTensor(weights), len(trajectory_returns))
         
     return sampler
-
-
-def define_terminal_sampler(dataset,
-                            dataset_nm,
-                            terminal = True):                 
-
-    terminal_idx = dataset.terminal_idx
-
-    assert "maze" not in dataset_nm, "this sampler is not for maze envs"
-
-    if terminal:
-        sampler = WeightedRandomSampler(torch.DoubleTensor(terminal_idx), len(terminal_idx))
-    else:
-        sampler = WeightedRandomSampler(torch.DoubleTensor(1-terminal_idx), len(1-terminal_idx))
-    return sampler
-
 
 
 # tensor helpers
@@ -317,6 +302,7 @@ class ElucidatedDiffusion(nn.Module):
             temperature : float = 1.0,
             state_dim : Optional[int] = None
     ):
+        # code from https://github.com/NVlabs/edm/blob/62072d2612c7da05165d6233d13d17d71f213fee/generate.py#L66
         samples = samples.to(device=self.device)
         samples = self.normalizer.normalize(samples)
         
@@ -329,36 +315,6 @@ class ElucidatedDiffusion(nn.Module):
         T, D = self.event_shape
         shape = samples.shape
 
-        # sigmas = self.noise_distribution(shape[0])
-        # padded_sigmas = sigmas.reshape(-1, 1, 1).repeat(1, T, D)
-
-        # noise = torch.randn_like(samples)
-        # noised_inputs = samples + padded_sigmas * noise  # alphas are 1. in the paper
-
-        ''' ~1114
-        # get the schedule, which is returned as (sigma, gamma) tuple, and pair up with the next sigma and gamma
-        sigmas = self.sample_schedule(num_sample_steps)
-        gammas = torch.where(
-            (sigmas >= self.S_tmin) & (sigmas <= self.S_tmax),
-            min(self.S_churn / num_sample_steps, math.sqrt(2) - 1),
-            0.
-        )
-
-        sigmas_and_gammas = list(zip(sigmas[:-1], sigmas[1:], gammas[:-1]))
-
-        # inputs are noise at the beginning
-        # init_sigma = sigmas[0]
-        # inputs = init_sigma * torch.randn(shape, device=self.device)
-        inputs = samples + sigmas[num_sample_steps//2] * torch.randn(shape, device=self.device)
-        '''
-
-
-        # inputs are now perturbed samples
-        # How to perturb K steps in ElucidatedDiffusion
-        # code from https://github.com/NVlabs/edm/blob/62072d2612c7da05165d6233d13d17d71f213fee/generate.py#L66
-        # schedule = "linear" : sigma(t) = t
-        # scaling = "none" : s(t) = 1
-        
         # Define time steps in terms of noise level.
         sigmas = self.sample_schedule(num_sample_steps)
         gammas = torch.where(
@@ -814,72 +770,3 @@ class Trainer(object):
             self.lr_scheduler.step()
 
         return total_loss
-
-
-class REDQTrainer(Trainer):
-    def __init__(
-            self,
-            diffusion_model,
-            train_batch_size: int = 16,
-            gradient_accumulate_every: int = 1,
-            train_lr: float = 1e-4,
-            lr_scheduler: Optional[str] = None,
-            train_num_steps: int = 100000,
-            ema_update_every: int = 10,
-            ema_decay: float = 0.995,
-            adam_betas: Tuple[float, float] = (0.9, 0.99),
-            save_and_sample_every: int = 10000,
-            weight_decay: float = 0.,
-            results_folder: str = './results',
-            amp: bool = False,
-            fp16: bool = False,
-            split_batches: bool = True,
-            model_terminals: bool = False,
-    ):
-        super().__init__(
-            diffusion_model,
-            dataset=None,
-            train_batch_size=train_batch_size,
-            gradient_accumulate_every=gradient_accumulate_every,
-            train_lr=train_lr,
-            lr_scheduler=lr_scheduler,
-            train_num_steps=train_num_steps,
-            ema_update_every=ema_update_every,
-            ema_decay=ema_decay,
-            adam_betas=adam_betas,
-            save_and_sample_every=save_and_sample_every,
-            weight_decay=weight_decay,
-            results_folder=results_folder,
-            amp=amp,
-            fp16=fp16,
-            split_batches=split_batches,
-        )
-
-        self.model_terminals = model_terminals
-
-    def train_from_redq_buffer(self, buffer , num_steps: Optional[int] = None):
-        num_steps = num_steps or self.train_num_steps
-        for j in range(num_steps):
-            b = buffer.sample_batch(self.batch_size)
-            obs = b['obs1']
-            next_obs = b['obs2']
-            actions = b['acts']
-            rewards = b['rews'][:, None]
-            done = b['done'][:, None]
-            data = [obs, actions, rewards, next_obs]
-            if self.model_terminals:
-                data.append(done)
-            data = np.concatenate(data, axis=1)
-            data = torch.from_numpy(data).float()
-            loss = self.train_on_batch(data, use_wandb=False)
-            if j % 1000 == 0:
-                print(f'[{j}/{num_steps}] loss: {loss:.4f}')
-
-    def update_normalizer(self, buffer, device=None):
-        data = make_inputs_from_replay_buffer(buffer, self.model_terminals)
-        data = torch.from_numpy(data).float()
-        self.model.normalizer.reset(data)
-        self.ema.ema_model.normalizer.reset(data)
-        if device:
-            self.model.normalizer.to(device)
-            self.ema.ema_model.normalizer.to(device)
