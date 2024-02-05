@@ -437,7 +437,7 @@ if __name__ == '__main__':
                 gen_sample = np.array(generated_samples)
                 np.random.shuffle(gen_sample)
                 gen_sample = gen_sample[:(cfg.SimpleDiffusionGenerator.save_num_transitions//cfg.Dataset.seq_len)+1]
-                savepath = os.path.join(resfolder, save_file_name)
+                savepath = os.path.join(f'data/generated_data/{args.dataset}', save_file_name)
                 np.savez(savepath, 
                         data = gen_sample,
                         config = dict(cfg))
