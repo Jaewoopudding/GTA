@@ -21,5 +21,5 @@ To sample augmented data from trained diffusion model, please run the following 
 ### Train Offline RL Algorithm
 To train offline RL algorithms with augmented dataset, please run the following command
 ```
-    python corl/algorithms/td3bc.py --dataset "<env_name>-<dataset_type>-v2" --datapath <datapath> --seed 0 --max_timesteps 1000000 --batch_size 1024
+    python corl/algorithms/td3bc.py --dataset "<env_name>-<dataset_type>-v2" --GDA GTA --seed 0 --max_timesteps 1000000 --batch_size 1024
 ```
