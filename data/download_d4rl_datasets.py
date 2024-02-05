@@ -219,9 +219,7 @@ def download_d4rl_maze2d_data(env_name: str = "maze2d-umaze-v1",
 	with open(f'{pkl_file_path}.pkl', 'wb') as f:
 		pickle.dump(paths, f)
 
-
 if __name__ == "__main__":
-
 	parser = argparse.ArgumentParser()
 	parser.add_argument("--env_name", type=str, default="halfcheetah_medium")
 
