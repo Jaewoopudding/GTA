@@ -38,7 +38,6 @@ class TrainConfig:
     env: str = "halfcheetah-medium-v2"  # OpenAI gym environment name
     seed: int = 0  # Sets Gym, PyTorch and Numpy seeds
     GDA: str = 'GTA' # Select the generative data augmentation type. ['GTA', 'None']
-    step: int = 1000000 # The number of training steps
     eval_freq: int = int(5e3)  # How often (time steps) we evaluate
     n_episodes: int = 10  # How many episodes run during evaluation
     max_timesteps: int = int(1e6)  # Max time steps to run environment
