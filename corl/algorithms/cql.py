@@ -2,7 +2,6 @@
 # STRONG UNDER-PERFORMANCE ON PART OF ANTMAZE TASKS. BUT IN IQL PAPER IT WORKS SOMEHOW
 # https://arxiv.org/pdf/2006.04779.pdf
 import os
-import random
 import uuid
 from copy import deepcopy
 from dataclasses import dataclass, field
@@ -26,9 +25,8 @@ pyrootutils.set_root(path = path,
                      dotenv = True,
                      pythonpath = True)
 
-from corl.shared.buffer import prepare_replay_buffer, RewardNormalizer, StateNormalizer, DiffusionConfig
-from corl.shared.utils  import wandb_init, set_seed, wrap_env, soft_update, compute_mean_std, normalize_states, eval_actor, get_saved_dataset, get_generated_dataset, merge_dictionary, get_dataset
-from corl.shared.validation import validate
+from corl.shared.buffer import prepare_replay_buffer, RewardNormalizer, StateNormalizer
+from corl.shared.utils  import wandb_init, set_seed, wrap_env, soft_update, compute_mean_std, eval_actor, get_dataset
 
 
 TensorBatch = List[torch.Tensor]
@@ -38,41 +36,30 @@ os.environ["WANDB_MODE"] = "online"
 @dataclass
 class TrainConfig:
     # Experiment
-    device: str = "cuda:6"
-    diffusion: DiffusionConfig = field(default_factory=DiffusionConfig)
-    s4rl_augmentation_type: str = 'identical'
-    std_scale: float = 0.0003
-    uniform_scale: float = 0.0003
-    adv_scale: float = 0.0001
-    iteration: int = 2
-    env: str = "hopper-medium-v2"   # OpenAI gym environment name
+    device: str = "cuda:0"
+    env: str = "halfcheetah-medium-v2"  # OpenAI gym environment name
     seed: int = 0  # Sets Gym, PyTorch and Numpy seeds
-    GDA: str = None  # "gda only" 'gda with original' None
-    step: int = 1000000 # Generated Data Augmentation 모델 학습 step 수
-    data_mixture_type: str = 'mixed'
-    GDA_id: str = None
-
-    # Wandb logging. 자동화 가능한 것은 자동화 해야 함. 데이터 생성할 때, 메타데이터를 첨부하도록 해야 함. 
-    project: str = env
-    group: str = "CQL-D4RL"
-    name: str = "CQL"
-    diffusion_horizon: int = 31
-    diffusion_backbone: str = 'mixer' # 'mixer', 'temporal'
-    
-    conditioned: bool = False
-    data_volume: int = 5e6
-    generation_type: str = 's' # 's,a' 's,a,r'
-    guidance_temperature: float = 1.2
-    guidance_target_multiple: float = 2
-
+    GDA: str = 'GTA' # Select the generative data augmentation type. ['GTA', 'synther' ,'None']
+    step: int = 1000000 # The number of training steps
     eval_freq: int = int(5e3)  # How often (time steps) we evaluate
-    val_freq: int = int(0) # Measuring Q Overestimation
     n_episodes: int = 10  # How many episodes run during evaluation
     max_timesteps: int = int(1e6)  # Max time steps to run environment
-    checkpoints_path: Optional[str] = "checkpoints"  # Save path
+    checkpoints_path: Optional[str] = "checkpoints"
     save_checkpoints: bool = True  # Save model checkpoints
     log_every: int = 1000
     load_model: str = ""  # Model load file name, "" doesn't load
+    
+    # Wandb logging
+    project: str = env
+    group: str = "CQL-D4RL"
+    name: str = "CQL"
+
+    # GTA configure. Default setting is logged if only GTA is 'None'
+    diffusion_horizon: int = 0 # Horizon of conditional diffusion model
+    diffusion_backbone: str = 'None' # Type of the diffusion backbone model 
+    conditioned: bool = False # Indicator for the condition flag
+    alpha: float = 0.0 # Exploitation level of the diffusion model
+
     # CQL
     buffer_size: int = 12_000_000  # Replay buffer size
     batch_size: int = 256  # Batch size for all networks
@@ -100,29 +87,15 @@ class TrainConfig:
 
     datapath: str = None
 
-    # Diffusion config
-
-
     def __post_init__(self):
-        self.name = f"{self.name}-{self.env}-{self.s4rl_augmentation_type}-{str(uuid.uuid4())[:4]}"
+        self.name = f"{self.name}-{self.env}-{str(uuid.uuid4())[:4]}"
         if self.checkpoints_path is not None:
             self.checkpoints_path = os.path.join(self.checkpoints_path, self.name)
-        if self.s4rl_augmentation_type == 'identical':
-            self.iteration = 1
         if self.GDA is None:
             self.diffusion_horizon = None
             self.diffusion_backbone = None
             self.conditioned = None
-            self.data_volume = None
-            self.generation_type = None
-            self.guidance_temperature = None
-            self.guidance_target_multiple = None
-        if (self.datapath is not None) and (self.datapath != 'None'):
-            self.GDA = os.path.splitext(os.path.basename(self.datapath))[0]
-            if self.GDA_id is not None:
-                self.GDA = self.GDA + f'_{self.GDA_id}'
-            if self.data_mixture_type is not None:
-                self.GDA = self.GDA + f'_{self.data_mixture_type}'
+            self.alpha = None
         if 'maze2d' in self.env:
             self.cql_lagrange=True
             self.cql_target_action_gap=5.0
@@ -718,7 +691,6 @@ def train(config: TrainConfig):
 
     ##### LOADING DATASET #####
     dataset, metadata = get_dataset(config)
-    trajectory_data = np.load(f'./data/{config.env}.pkl', allow_pickle=True)
     for k, v in metadata.items():
         setattr(config, k, v)
 
@@ -733,15 +705,9 @@ def train(config: TrainConfig):
         action_dim=action_dim,
         buffer_size=config.buffer_size,
         dataset=dataset,
-        env_name=config.env,
         device=config.device,
-        s4rl_augmentation_type=config.s4rl_augmentation_type,
-        std_scale=config.std_scale, 
-        uniform_scale=config.uniform_scale, 
-        adv_scale=config.adv_scale, 
         reward_normalizer=RewardNormalizer(dataset, config.env) if config.normalize_reward else None,
         state_normalizer=StateNormalizer(state_mean, state_std),
-        diffusion_config=config.diffusion,
     )
 
     max_action = float(env.action_space.high[0])
@@ -810,7 +776,7 @@ def train(config: TrainConfig):
 
     evaluations = []
     for t in range(int(config.max_timesteps)):
-        batch = replay_buffer.sample(config.batch_size, q_function=critic_1, iteration=config.iteration)
+        batch = replay_buffer.sample(config.batch_size)
         batch = [b.to(config.device) for b in batch]
         log_dict = trainer.train(batch)
 
@@ -838,22 +804,6 @@ def train(config: TrainConfig):
             print("---------------------------------------")
             log_dict = {"result/d4rl_normalized_score": normalized_eval_score}
             wandb.log(log_dict, step=trainer.total_it)
-            
-        if (config.val_freq != 0) and (t % config.val_freq == 0 or t == config.max_timesteps - 1):
-            q_gap, bias = validate(trajectory_data, [trainer.critic_1, trainer.critic_2], trainer.actor, config.discount, config.device)
-            print("---------------------------------------")
-            print(
-                f"Q gap: {q_gap.mean():.3f}, MC bias: {bias.mean():.3f} "
-            )
-            print("---------------------------------------")
-            wandb.log({
-                'Q gap mean': q_gap.mean(),
-                'Q gap std': q_gap.std(),
-                'MC bias mean': bias.mean(),
-                'MC bias std': bias.std()
-                },
-                step=trainer.total_it
-            )
 
     config.evaluations = evaluations
     if config.checkpoints_path is not None:

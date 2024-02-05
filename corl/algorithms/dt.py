@@ -1,7 +1,6 @@
 import os
 import random
 import uuid
-from collections import defaultdict
 from dataclasses import asdict, dataclass
 from typing import Any, DefaultDict, Dict, List, Optional, Tuple, Union
 
@@ -13,7 +12,7 @@ import torch
 import torch.nn as nn
 import wandb
 from torch.nn import functional as F
-from torch.utils.data import DataLoader, IterableDataset, Dataset
+from torch.utils.data import DataLoader, Dataset
 from tqdm.auto import tqdm, trange  # noqa
 from torch.utils.data import WeightedRandomSampler
 import pyrootutils
@@ -28,33 +27,30 @@ from corl.shared.utils  import wandb_init, get_trajectory_dataset, merge_diction
 
 @dataclass
 class TrainConfig:
-    # wandb params
-    device: str = "cuda:2"
-    s4rl_augmentation_type: str = 'identical'
-    std_scale: float = 0.0003
-    uniform_scale: float = 0.0003
-    adv_scale: float = 0.0001
-    iteration: int = 2
-    env: str = "maze2d-medium-v1"  # OpenAI gym environment name
+    # Experiment
+    device: str = "cuda:0"
+    env: str = "halfcheetah-medium-v2"  # OpenAI gym environment name
     seed: int = 0  # Sets Gym, PyTorch and Numpy seeds
-    eval_seed: int = 42
-    GDA: str = 'GTA'  # "gda only" 'gda with original' None
-    step: int = 100000 # Generated Data Augmentation 모델 학습 step 수
-    data_mixture_type: str = 'mixed'
-    GDA_id: str = None
-
-    # wandb params
-    project: str = 'DT'
+    GDA: str = 'GTA' # Select the generative data augmentation type. ['GTA', 'synther' ,'None']
+    step: int = 1000000 # The number of training steps
+    eval_freq: int = int(5e3)  # How often (time steps) we evaluate
+    n_episodes: int = 10  # How many episodes run during evaluation
+    max_timesteps: int = int(1e6)  # Max time steps to run environment
+    checkpoints_path: Optional[str] = "checkpoints"
+    save_checkpoints: bool = True  # Save model checkpoints
+    log_every: int = 1000
+    load_model: str = ""  # Model load file name, "" doesn't load
+    
+    # Wandb logging
+    project: str = env
     group: str = "DT-D4RL"
     name: str = "DT"
-    diffusion_horizon: int = 31
-    diffusion_backbone: str = 'mixer' # 'mixer', 'temporal'
 
-    conditioned: bool = False
-    data_volume: int = 5e6
-    generation_type: str = 's' # 's,a' 's,a,r'
-    guidance_temperature: float = 1.2
-    guidance_target_multiple: float = 1.1
+    # GTA configure. Default setting is logged if only GTA is 'None'
+    diffusion_horizon: int = 0 # Horizon of conditional diffusion model
+    diffusion_backbone: str = 'None' # Type of the diffusion backbone model 
+    conditioned: bool = False # Indicator for the condition flag
+    alpha: float = 0.0 # Exploitation level of the diffusion model
 
     # model params
     embedding_dim: int = 128
@@ -66,6 +62,7 @@ class TrainConfig:
     residual_dropout: float = 0.1
     embedding_dropout: float = 0.1
     max_action: float = 1.0
+
     # training params
     learning_rate: float = 1e-4
     betas: Tuple[float, float] = (0.9, 0.999)
@@ -76,35 +73,27 @@ class TrainConfig:
     warmup_steps: int = 10_000
     reward_scale: float = 0.001
     num_workers: int = 4
+
     # evaluation params
     target_returns: Tuple[float, ...] = (12000.0, 6000.0)
     eval_episodes: int = 100
     eval_every: int = 10_000
+
     # general params
     checkpoints_path: Optional[str] = 'checkpoints'
     deterministic_torch: bool = False
     datapath: str = None
 
     def __post_init__(self):
-        self.name = f"{self.name}-{self.env}-{self.s4rl_augmentation_type}-{str(uuid.uuid4())[:4]}"
+        self.name = f"{self.name}-{self.env}-{str(uuid.uuid4())[:4]}"
+        self.eval_seed=self.seed
         if self.checkpoints_path is not None:
             self.checkpoints_path = os.path.join(self.checkpoints_path, self.name)
-        if self.s4rl_augmentation_type == 'identical':
-            self.iteration = 1
         if self.GDA is None:
             self.diffusion_horizon = None
             self.diffusion_backbone = None
             self.conditioned = None
-            self.data_volume = None
-            self.generation_type = None
-            self.guidance_temperature = None
-            self.guidance_target_multiple = None
-        if (self.datapath is not None) and (self.datapath != 'None'):
-            self.GDA = os.path.splitext(os.path.basename(self.datapath))[0]
-        if self.GDA_id is not None:
-            self.GDA = self.GDA + f'_{self.GDA_id}'
-        if self.data_mixture_type is not None:
-            self.GDA = self.GDA + f'_{self.data_mixture_type}'
+            self.alpha = None
         if self.env.split('-')[0] == 'halfcheetah':
             self.target_returns: Tuple[float, ...] = (12000.0,)
         elif self.env.split('-')[0] == 'walker2d':
@@ -169,17 +158,14 @@ def discounted_cumsum(x: np.ndarray, gamma: float) -> np.ndarray:
         cumsum[t] = x[t] + gamma * cumsum[t + 1]
     return cumsum
 
-def attach_generated_rtg(reward_array, rtg_init, guidance_target_multiple, env_type: str = 'locomotion'):
+def attach_generated_rtg(reward_array, rtg_init, guidance_target_multiple):
     temp = np.zeros_like(reward_array)
     temp[1:] = reward_array[:-1]
     rewards_cumsum = np.cumsum(temp)
-    multiplier = guidance_target_multiple if env_type == 'locomotion' else 1
-    return np.ones_like(reward_array) * rtg_init * multiplier - rewards_cumsum
-
-
+    return np.ones_like(reward_array) * rtg_init - rewards_cumsum
 
 def load_d4rl_trajectories(
-    env: Dict, gamma: float = 1.0, augmentation: float = None
+    env: Dict, gamma: float = 1.0
 ) -> Tuple[List[DefaultDict[str, np.ndarray]], Dict[str, Any]]:
     dataset, metadata = get_trajectory_dataset(env)
     traj, traj_len = [], []
@@ -197,7 +183,7 @@ def load_d4rl_trajectories(
                 'observations': subtrajectory['observations'],
                 'actions': subtrajectory['actions'],
                 'rewards': subtrajectory['rewards'],
-                'returns': attach_generated_rtg(subtrajectory['rewards'], subtrajectory['RTG'][0], metadata['guidance_target_multiple'], env_type),
+                'returns': attach_generated_rtg(subtrajectory['rewards'], subtrajectory['RTG'][0], metadata['guidance_target_multiple']),
                 'timesteps': subtrajectory['timesteps']
             })
             traj_len.append(subtrajectory['actions'].shape[0])
@@ -212,29 +198,9 @@ def load_d4rl_trajectories(
             traj_len.append(subtrajectory['actions'].shape[0])
             original_count += 1
 
-    s4rl_string='No S4RL augmentation' if augmentation is None else f"S4RL augmentation scale: {augmentation}"
 
-    print(f"================<Dataset information>================\nEnvironment: {env.env}\nGenerated trajectories: {gen_count}, original trajectories: {original_count}\n{s4rl_string}\n=====================================================")
+    print(f"================<Dataset information>================\nEnvironment: {env.env}\nGenerated trajectories: {gen_count}, original trajectories: {original_count}\n=====================================================")
 
-    # data_ = defaultdict(list)
-    # for i in trange(dataset["rewards"].shape[0], desc="Processing trajectories"):
-    #     data_["observations"].append(dataset["observations"][i])
-    #     data_["actions"].append(dataset["actions"][i])
-    #     data_["rewards"].append(dataset["rewards"][i])
-
-    #     if dataset["terminals"][i] or dataset["timeouts"][i]:
-    #         episode_data = {k: np.array(v, dtype=np.float32) for k, v in data_.items()}
-    #         # return-to-go if gamma=1.0, just discounted returns else
-    #         episode_data["returns"] = discounted_cumsum(
-    #             episode_data["rewards"], gamma=gamma
-    #         )
-    #         traj.append(episode_data)
-    #         traj_len.append(episode_data["actions"].shape[0])
-    #         # reset trajectory buffer
-    #         data_ = defaultdict(list)
-
-    # needed for normalization, weighted sampling, other stats can be added also
-            
     merged_dataset = merge_dictionary(dataset)
     info = {
         "obs_mean": merged_dataset["observations"].mean(0, keepdims=True),
@@ -245,12 +211,10 @@ def load_d4rl_trajectories(
 
 
 class SequenceDataset(Dataset):
-    def __init__(self, config: Dict, seq_len: int = 10, reward_scale: float = 1.0, augmentation_scale: float = None):
-        self.dataset, info = load_d4rl_trajectories(config, gamma=1.0, augmentation=augmentation_scale)
+    def __init__(self, config: Dict, seq_len: int = 10, reward_scale: float = 1.0):
+        self.dataset, info = load_d4rl_trajectories(config, gamma=1.0)
         self.reward_scale = reward_scale
         self.seq_len = seq_len
-        self.augmentation_scale = augmentation_scale
-
         self.state_mean = info["obs_mean"]
         self.state_std = info["obs_std"]
         # https://github.com/kzl/decision-transformer/blob/e2d82e68f330c00f763507b3b01d774740bee53f/gym/experiment.py#L116 # noqa
@@ -268,8 +232,6 @@ class SequenceDataset(Dataset):
             time_steps = np.arange(start_idx, start_idx + self.seq_len)
 
         states = (states - self.state_mean) / self.state_std
-        if self.augmentation_scale:
-            states = states + np.random.randn(states.shape[0], states.shape[1]) * self.augmentation_scale
         returns = returns * self.reward_scale
         # pad up to seq_len if needed
         mask = np.hstack(
@@ -505,9 +467,8 @@ def train(config: TrainConfig):
     wandb_init(asdict(config))
 
     # data & dataloader setup
-    s4rl = None if config.s4rl_augmentation_type=='identical' else config.std_scale
     dataset = SequenceDataset(
-        config, seq_len=config.seq_len, reward_scale=config.reward_scale, augmentation_scale=s4rl
+        config, seq_len=config.seq_len, reward_scale=config.reward_scale
     )
     sampler = WeightedRandomSampler(dataset.sample_prob, len(dataset.sample_prob))
 
@@ -526,6 +487,7 @@ def train(config: TrainConfig):
         state_std=dataset.state_std,
         reward_scale=config.reward_scale,
     )
+
     # model & optimizer & scheduler setup
     config.state_dim = eval_env.observation_space.shape[0]
     config.action_dim = eval_env.action_space.shape[0]
@@ -576,7 +538,6 @@ def train(config: TrainConfig):
             padding_mask=padding_mask,
         )
         loss = F.mse_loss(predicted_actions, actions.detach(), reduction="none")
-        # [batch_size, seq_len, action_dim] * [batch_size, seq_len, 1]
         loss = (loss * mask.unsqueeze(-1)).mean()
 
         optim.zero_grad()

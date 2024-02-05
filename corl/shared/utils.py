@@ -1,5 +1,4 @@
 import os
-import sys
 import random
 from typing import Any, Dict, List, Optional, Tuple, Union, Dict
 
@@ -22,7 +21,6 @@ def wandb_init(config: dict) -> None:
         id=str(uuid.uuid4()),
     )
     wandb.config = {
-        "s4rl_augmentation_type": config['s4rl_augmentation_type'],
         "environment": config['env'],
         "seed": config['seed']
     }
@@ -122,8 +120,6 @@ def eval_actor_return_evalbuffer(
     actor.train()
     return np.asarray(episode_rewards), np.array(evaluation_buffer)
 
-
-
 # Training and evaluation logic
 @torch.no_grad()
 def eval_rollout(
@@ -189,223 +185,57 @@ def merge_dictionary(list_of_Dict: List[Dict]) -> Dict:
 
 def get_saved_dataset(env: str) -> Dict:
     with open(f'./data/{env}.pkl','rb') as f:
-        data = pickle.load(f) # data는 Dict의 list로 되어 있다.
+        data = pickle.load(f)
     return merge_dictionary(data)
 
-def get_generated_dataset(env: str, step: Optional[int]=None, path: Optional[str]=None) -> Dict:
-    if (path is not None) and (path != 'None'):
-        file_type = path.split('.')[-1]
-        if file_type == 'npy':    
-            data = np.load(path, allow_pickle=True).squeeze()
-            config_dict = data[-1]
-            data = data[:-1]
-        elif file_type == 'npz':
-            data = np.load(path, allow_pickle=True)
-            config_dict = data['config'].item()
-            data = data['data'].squeeze()
-        else:
-            raise RuntimeError(f"file extension is awkward: {file_type}")
-        
-    else:
-        try:
-            with open(f'./data/generated_data/{env}.npy','rb') as f:
-                data = np.load(f, allow_pickle=True).squeeze() # data는 Dict의 list로 되어 있다.
-                file_type = 'npy'
-        except:
-            with open(f'./data/generated_data/{env}.npz','rb') as f:
-                data = np.load(f, allow_pickle=True) # data는 Dict의 list로 되어 있다.
-                file_type = 'npz'
-        
-        if file_type == 'npy':    
-            config_dict = data[-1]
-            data = data[:-1]
-        elif file_type == 'npz':
-            config_dict = data['config'].item()
-            data = data['data'].squeeze()
-        else:
-            raise RuntimeError(f"file extension is awkward: {file_type}")
-    
+
+def get_GTA_dataset(env: str, step: Optional[int]=None) -> Dict:
+    data = np.load(f'data/generated_data/{env}.npz', allow_pickle=True) # data는 Dict의 list로 되어 있다.
+    config_dict = data['config'].item()
+    data = data['data'].squeeze()
     metadata = {}
-
-    if 'Dataset' in config_dict.keys():
-        try:
-            metadata['diffusion_horizon'] = config_dict['construct_diffusion_model']['denoising_network']['horizon']
-        except:
-            metadata['diffusion_horizon'] = 1
-        metadata['diffusion_backborn'] = config_dict['construct_diffusion_model']['denoising_network']['_target_'].split('.')[-1]
-        metadata['conditioned'] = True if config_dict['construct_diffusion_model']['denoising_network']['cond_dim'] != 0 else False
-        if config_dict['Dataset']['modalities'].__len__() == 3:
-            metadata['generation_type'] = 's,a,r'
-        elif config_dict['Dataset']['modalities'].__len__() == 2:
-            metadata['generation_type'] = 's,a'
-        elif config_dict['Dataset']['modalities'].__len__() == 3:
-            metadata['generation_type'] = 's'
-        else:
-            raise ValueError()
-        try:
-            metadata['guidance_temperature'] = config_dict['SimpleDiffusionGenerator']['temperature']
-        except: 
-            metadata['guidance_temperature'] = 1
-        metadata['guidance_target_multiple'] = config_dict['SimpleDiffusionGenerator']['guidance_rewardscale']
-        metadata['noise_level'] = config_dict['SimpleDiffusionGenerator']['noise_level']
-    return merge_dictionary([*data]), metadata
-
-def get_synther_dataset(env: str, step: Optional[int]=None, path: Optional[str]=None) -> Dict:
-    if (path is not None) and (path != 'None'):
-        data = np.load(path, allow_pickle=True)
-        
-    else:
-        data = np.load(f'/input/{env}.npz', allow_pickle=True) # data는 Dict의 list로 되어 있다.
-    dataset = {}
-
-    for key in data.files:
-        dataset[key] = data[key]
-    return dataset, {}
-
-def get_GTA_dataset(env: str, step: Optional[int]=None, path: Optional[str]=None) -> Dict:
-    if (path is not None) and (path != 'None'):
-        file_type = path.split('.')[-1]
-        if file_type == 'npy':    
-            data = np.load(path, allow_pickle=True).squeeze()
-            config_dict = data[-1]
-            data = data[:-1]
-        elif file_type == 'npz':
-            data = np.load(path, allow_pickle=True)
-            config_dict = data['config'].item()
-            data = data['data'].squeeze()
-        else:
-            raise RuntimeError(f"file extension is awkward: {file_type}")
-        
-    else:
-        try:
-            data = np.load(f'/input/{env}.npy', allow_pickle=True).squeeze() # data는 Dict의 list로 되어 있다.
-            file_type = 'npy'
-        except:
-            data = np.load(f'/input/{env}.npz', allow_pickle=True) # data는 Dict의 list로 되어 있다.
-            file_type = 'npz'
-        
-        if file_type == 'npy':    
-            config_dict = data[-1]
-            data = data[:-1]
-        elif file_type == 'npz':
-            config_dict = data['config'].item()
-            data = data['data'].squeeze()
-        else:
-            raise RuntimeError(f"file extension is awkward: {file_type}")
-    
-    metadata = {}
-
-    if 'Dataset' in config_dict.keys():
-        try:
-            metadata['diffusion_horizon'] = config_dict['construct_diffusion_model']['denoising_network']['horizon']
-        except:
-            metadata['diffusion_horizon'] = 1
-        metadata['diffusion_backborn'] = config_dict['construct_diffusion_model']['denoising_network']['_target_'].split('.')[-1]
-        metadata['conditioned'] = True if config_dict['construct_diffusion_model']['denoising_network']['cond_dim'] != 0 else False
-        if config_dict['Dataset']['modalities'].__len__() == 3:
-            metadata['generation_type'] = 's,a,r'
-        elif config_dict['Dataset']['modalities'].__len__() == 2:
-            metadata['generation_type'] = 's,a'
-        elif config_dict['Dataset']['modalities'].__len__() == 3:
-            metadata['generation_type'] = 's'
-        else:
-            raise ValueError()
-        try:
-            metadata['guidance_temperature'] = config_dict['SimpleDiffusionGenerator']['temperature']
-        except: 
-            metadata['guidance_temperature'] = 1
-        metadata['guidance_target_multiple'] = config_dict['SimpleDiffusionGenerator']['guidance_rewardscale']
-        metadata['noise_level'] = config_dict['SimpleDiffusionGenerator']['noise_level']
+    try:
+        metadata['diffusion_horizon'] = config_dict['construct_diffusion_model']['denoising_network']['horizon']
+    except:
+        metadata['diffusion_horizon'] = 1
+    metadata['diffusion_backbone'] = config_dict['construct_diffusion_model']['denoising_network']['_target_'].split('.')[-1]
+    metadata['conditioned'] = True if config_dict['construct_diffusion_model']['denoising_network']['cond_dim'] != 0 else False
+    metadata['guidance_target_multiple'] = config_dict['SimpleDiffusionGenerator']['guidance_rewardscale']
+    metadata['noise_level'] = config_dict['SimpleDiffusionGenerator']['noise_level']
     return merge_dictionary([*data]), metadata
 
 def get_dataset(config):
-    metadata = {}
-    if config.data_mixture_type== 'mixed':
+    if config.GDA is None or config.GDA == 'None':
         dataset = get_saved_dataset(config.env)
-        if config.GDA is None or config.GDA == 'None':
-            dataset = get_saved_dataset(config.env)
-            return dataset, metadata
-        if 'synther' in config.GDA:
-            generated_dataset, metadata = get_synther_dataset(config.env, config.step, config.datapath)
-        elif 'GTA' in config.GDA:
-            generated_dataset, metadata = get_GTA_dataset(config.env, config.step, config.datapath)
-        else:
-            generated_dataset, metadata = get_generated_dataset(config.env, config.step, config.datapath)
-        dataset = merge_dictionary([dataset, generated_dataset])
-        return dataset, metadata
+        return dataset, {}
+    elif 'GTA' in config.GDA:
+        generated_dataset, metadata = get_GTA_dataset(config.env, config.step)
     else:
-        if config.GDA is None or config.GDA == 'None':
-            dataset = get_saved_dataset(config.env)
-            return dataset, metadata
-        elif 'synther' in config.GDA:
-            return get_synther_dataset(config.env, config.step, config.datapath)
-        elif 'GTA' in config.GDA:
-            return get_GTA_dataset(config.env, config.step, config.datapath)
-        else:
-            return get_generated_dataset(config.env, config.step, config.datapath)
-        
+        raise RuntimeError("GDA must be one of the 'GTA' or 'None'.")
+    dataset = merge_dictionary([get_saved_dataset(config.env), generated_dataset])
+    return dataset, metadata
 
 def get_trajectory_dataset(config):
     metadata = {}
-    path = config.datapath
     env = config.env
     if config.GDA is None or 'None' in config.GDA:
         with open(f'./data/{env}.pkl','rb') as f:
-            dataset = np.load(f, allow_pickle=True) # data는 Dict의 list로 되어 있다.
+            dataset = np.load(f, allow_pickle=True)
             return dataset, metadata
     else:
-        if path is not None:
-            file_type = path.split('.')[-1]
-            if file_type == 'npy':    
-                data = np.load(path, allow_pickle=True).squeeze()
-                config_dict = data[-1]
-                data = data[:-1]
-            elif file_type == 'npz':
-                data = np.load(path, allow_pickle=True)
-                config_dict = data['config'].item()
-                data = data['data'].squeeze()
-            else:
-                raise RuntimeError(f"file extension is awkward: {file_type}")
-            
-        else:
-            try:
-                data = np.load(f'/input/{env}.npy', allow_pickle=True).squeeze() # data는 Dict의 list로 되어 있다.
-                file_type = 'npy'
-            except:
-                data = np.load(f'/input/{env}.npz', allow_pickle=True) # data는 Dict의 list로 되어 있다.
-                file_type = 'npz'
-            
-            if file_type == 'npy':    
-                config_dict = data[-1]
-                data = data[:-1]
-            elif file_type == 'npz':
-                config_dict = data['config'].item()
-                data = data['data'].squeeze()
-
-            else:
-                raise RuntimeError(f"file extension is awkward: {file_type}")
-            
-            if config.data_mixture_type=='mixed':
-                with open(f'./data/{env}.pkl','rb') as f:
-                    dataset = np.load(f, allow_pickle=True) # data는 Dict의 list로 되어 있다.
-                    data = (data.tolist() +(dataset))
-
-        if 'Dataset' in config_dict.keys():
-            try:
-                metadata['diffusion_horizon'] = config_dict['construct_diffusion_model']['denoising_network']['horizon']
-            except:
-                metadata['diffusion_horizon'] = 1
-            metadata['diffusion_backborn'] = config_dict['construct_diffusion_model']['denoising_network']['_target_'].split('.')[-1]
-            metadata['conditioned'] = True if config_dict['construct_diffusion_model']['denoising_network']['cond_dim'] != 0 else False
-            if config_dict['Dataset']['modalities'].__len__() == 3:
-                metadata['generation_type'] = 's,a,r'
-            elif config_dict['Dataset']['modalities'].__len__() == 2:
-                metadata['generation_type'] = 's,a'
-            elif config_dict['Dataset']['modalities'].__len__() == 3:
-                metadata['generation_type'] = 's'
-            else:
-                raise ValueError()
-            metadata['guidance_temperature'] = 1 # Hard coded
-            metadata['guidance_target_multiple'] = config_dict['SimpleDiffusionGenerator']['guidance_rewardscale']
-            metadata['noise_level'] = config_dict['SimpleDiffusionGenerator']['noise_level']
+        data = np.load(f'data/generated_data/{env}.npz', allow_pickle=True) # data는 Dict의 list로 되어 있다.
+        config_dict = data['config'].item()
+        data = data['data'].squeeze()
+    
+        with open(f'./data/{env}.pkl','rb') as f:
+            dataset = np.load(f, allow_pickle=True) # data는 Dict의 list로 되어 있다.
+            data = (data.tolist() +(dataset))
+        try:
+            metadata['diffusion_horizon'] = config_dict['construct_diffusion_model']['denoising_network']['horizon']
+        except:
+            metadata['diffusion_horizon'] = 1
+        metadata['diffusion_backbone'] = config_dict['construct_diffusion_model']['denoising_network']['_target_'].split('.')[-1]
+        metadata['conditioned'] = True if config_dict['construct_diffusion_model']['denoising_network']['cond_dim'] != 0 else False
+        metadata['guidance_target_multiple'] = config_dict['SimpleDiffusionGenerator']['guidance_rewardscale']
+        metadata['noise_level'] = config_dict['SimpleDiffusionGenerator']['noise_level']
         return data, metadata

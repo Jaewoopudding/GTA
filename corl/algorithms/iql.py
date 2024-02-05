@@ -6,7 +6,7 @@ import random
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import d4rl
 import gym
@@ -26,8 +26,8 @@ pyrootutils.set_root(path = path,
                      dotenv = True,
                      pythonpath = True)
 
-from corl.shared.buffer import prepare_replay_buffer, RewardNormalizer, StateNormalizer, DiffusionConfig
-from corl.shared.utils  import wandb_init, set_seed, wrap_env, soft_update, compute_mean_std, normalize_states, eval_actor, get_saved_dataset, get_generated_dataset, merge_dictionary, get_dataset
+from corl.shared.buffer import prepare_replay_buffer, RewardNormalizer, StateNormalizer
+from corl.shared.utils  import wandb_init, set_seed, wrap_env, soft_update, compute_mean_std, eval_actor, get_dataset
 
 TensorBatch = List[torch.Tensor]
 os.environ["WANDB_MODE"] = "online"
@@ -41,34 +41,10 @@ LOG_STD_MAX = 2.0
 class TrainConfig:
     # Experiment
     device: str = "cuda:0"
-    s4rl_augmentation_type: str = 'identical'
-    std_scale: float = 0.0003
-    uniform_scale: float = 0.0003
-    adv_scale: float = 0.0001
-    iteration: int = 2
-    diffusion: DiffusionConfig = field(default_factory=DiffusionConfig)
-    env: str = "hopper-medium-v2"  # OpenAI gym environment name
+    env: str = "halfcheetah-medium-v2"  # OpenAI gym environment name
     seed: int = 0  # Sets Gym, PyTorch and Numpy seeds
-    GDA: str = None  # "gda only" 'gda with original' None
-    data_mixture_type: str = 'mixed'
-    GDA_id: str = None
-
-    # Wandb logging
-    project: str = env
-    group: str = "IQL-D4RL"
-    name: str = "IQL"
-    diffusion_horizon: int = 31
-    diffusion_backbone: str = 'mixer' # 'mixer', 'temporal'
-    
-    conditioned: bool = False
-    data_volume: int = 5e6
-    generation_type: str = 's' # 's,a' 's,a,r'
-    guidance_temperature: float = 1.2
-    guidance_target_multiple: float = 2
-    
-
-    step: int = 1000000 # Generated Data Augmentation 모델 학습 step 수
-
+    GDA: str = 'GTA' # Select the generative data augmentation type. ['GTA', 'synther' ,'None']
+    step: int = 1000000 # The number of training steps
     eval_freq: int = int(5e3)  # How often (time steps) we evaluate
     n_episodes: int = 10  # How many episodes run during evaluation
     max_timesteps: int = int(1e6)  # Max time steps to run environment
@@ -76,45 +52,42 @@ class TrainConfig:
     save_checkpoints: bool = True  # Save model checkpoints
     log_every: int = 1000
     load_model: str = ""  # Model load file name, "" doesn't load
+    
+    # Wandb logging
+    project: str = env
+    group: str = "IQL-D4RL"
+    name: str = "IQL"
+
+    # GTA configure. Default setting is logged if only GTA is 'None'
+    diffusion_horizon: int = 0 # Horizon of conditional diffusion model
+    diffusion_backbone: str = 'None' # Type of the diffusion backbone model 
+    conditioned: bool = False # Indicator for the condition flag
+    alpha: float = 0.0 # Exploitation level of the diffusion model
+
     # IQL
     buffer_size: int = 12_000_000  # Replay buffer size
     batch_size: int = 256  # Batch size for all networks
     discount: float = 0.99  # Discount factor
-    tau: float = 0.005   # Target network update rate ## TODO
+    tau: float = 0.005   # Target network update rate 
     beta: float = 3.0  # Inverse temperature. Small beta -> BC, big beta -> maximizing Q
     iql_tau: float = 0.7  # Coefficient for asymmetric loss
-    iql_deterministic: bool = False  # Use deterministic actor ## TODO
+    iql_deterministic: bool = False  # Use deterministic actor 
     normalize: bool = True  # Normalize states
-    normalize_reward: bool = False    # Normalize reward ## TODO
-
-    # Diffusion config
+    normalize_reward: bool = False    # Normalize reward
     
     # Network size
     network_width: int = 256
     network_depth: int = 2
-    datapath: str = None
     
     def __post_init__(self):
-        self.name = f"{self.name}-{self.env}-{self.s4rl_augmentation_type}-{str(uuid.uuid4())[:4]}"
+        self.name = f"{self.name}-{self.env}-{str(uuid.uuid4())[:4]}"
         if self.checkpoints_path is not None:
             self.checkpoints_path = os.path.join(self.checkpoints_path, self.name)
-        if self.s4rl_augmentation_type == 'identical':
-            self.iteration = 1
         if self.GDA is None:
             self.diffusion_horizon = None
             self.diffusion_backbone = None
             self.conditioned = None
-            self.data_volume = None
-            self.generation_type = None
-            self.guidance_temperature = None
-            self.guidance_target_multiple = None
-        if (self.datapath is not None) and (self.datapath != 'None'):
-            self.GDA = os.path.splitext(os.path.basename(self.datapath))[0]
-            if self.GDA_id is not None:
-                self.GDA = self.GDA + f'_{self.GDA_id}'
-            if self.data_mixture_type is not None:
-                self.GDA = self.GDA + f'_{self.data_mixture_type}'
-
+            self.alpha = None
 
 def asymmetric_l2_loss(u: torch.Tensor, tau: float) -> torch.Tensor:
     return torch.mean(torch.abs(tau - (u < 0).float()) * u ** 2)
@@ -412,15 +385,9 @@ def train(config: TrainConfig):
         action_dim=action_dim,
         buffer_size=config.buffer_size,
         dataset=dataset,
-        env_name=config.env,
         device=config.device,
-        s4rl_augmentation_type=config.s4rl_augmentation_type,
-        std_scale=config.std_scale, 
-        uniform_scale=config.uniform_scale, 
-        adv_scale=config.adv_scale, 
         reward_normalizer=RewardNormalizer(dataset, config.env) if config.normalize_reward else None,
         state_normalizer=StateNormalizer(state_mean, state_std),
-        diffusion_config=config.diffusion,
     )
 
     max_action = float(env.action_space.high[0])
@@ -477,7 +444,7 @@ def train(config: TrainConfig):
 
     evaluations = []
     for t in range(int(config.max_timesteps)):
-        batch = replay_buffer.sample(config.batch_size, q_function=q_network, iteration=config.iteration)
+        batch = replay_buffer.sample(config.batch_size)
         batch = [b.to(config.device) for b in batch]
         log_dict = trainer.train(batch)
 
@@ -503,11 +470,6 @@ def train(config: TrainConfig):
                 f"{eval_score:.3f} , D4RL score: {normalized_eval_score:.3f}"
             )
             print("---------------------------------------")
-            # if config.checkpoints_path is not None and config.save_checkpoints:
-            #     torch.save(
-            #         trainer.state_dict(),
-            #         os.path.join(config.checkpoints_path, f"checkpoint_{t}.pt"),
-            #     )
             log_dict = {"result/d4rl_normalized_score": normalized_eval_score,
                         "d4rl_normalized_score": normalized_eval_score}
             wandb.log(log_dict, step=trainer.total_it)
