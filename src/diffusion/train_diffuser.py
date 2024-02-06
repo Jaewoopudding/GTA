@@ -247,7 +247,6 @@ if __name__ == '__main__':
     parser.add_argument('--config_path', type=str, default='../../configs')
     parser.add_argument('--config_name', type=str, default='gta.yaml')
     parser.add_argument('--wandb_project', type=str, default="gta")
-    parser.add_argument('--wandb_entity', type=str, default="gta")
     parser.add_argument('--wandb_group', type=str, default="gta")
     #
     parser.add_argument('--results_folder', type=str, default='./results')
@@ -372,7 +371,6 @@ if __name__ == '__main__':
         # Initialize logging.
         wandb.init(
             project=args.wandb_project,
-            entity=args.wandb_entity,
             config=args,
             group=args.wandb_group,
             name=resfolder.split('/')[-1],
