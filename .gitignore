@@ -11,5 +11,4 @@ outputs/
 *.json
 *.pth
 *.npz
-*.png
 *.gz
