@@ -6,5 +6,5 @@
 ![hopper-medexp-TD3BC](assets/hopper-medexp-TD3BC.png)
 ![hopper-medexp-CQL](assets/hopper-medexp-CQL.png)
 ![hopper-medexp-IQL](assets/hopper-medexp-IQL.png)
-![walker2d-medrep-CQL](assets/walker2d-medrep-IQL.png)
+![walker2d-medrep-CQL](assets/walker2d-medrep-CQL.png)
 ![walker2d-medrep-MCQ](assets/walker2d-medrep-MCQ.png)
