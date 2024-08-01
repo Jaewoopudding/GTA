@@ -1,6 +1,6 @@
 # GTA: Generative Trajectory Augmentation with Guidance for Offline Reinforcement Learning
 
-Official Code for [GTA: Generative Trajectory Augmentation with Guidance for Offline Reinforcement Learning](https://arxiv.org/abs/2405.16907)
+Anonymous Code for GTA: Generative Trajectory Augmentation with Guidance for Offline Reinforcement Learning
 
 ### Install Dependencies
 To install dependecies, please run the command `pip install -r requirement.txt`.
